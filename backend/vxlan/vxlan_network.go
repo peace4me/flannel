@@ -154,6 +154,7 @@ func (nw *network) handleSubnetEvents(batch []subnet.Event) {
 
 				// Set the route - the kernel would ARP for the Gw IP address if it hadn't already been set above so make sure
 				// this is done last.
+				// 这里就是取代了L3 miss
 				if err := netlink.RouteReplace(&vxlanRoute); err != nil {
 					log.Errorf("failed to add vxlanRoute (%s -> %s): %v", vxlanRoute.Dst, vxlanRoute.Gw, err)
 

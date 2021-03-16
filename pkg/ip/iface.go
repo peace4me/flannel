@@ -121,10 +121,14 @@ func GetInterfaceByIP(ip net.IP) (*net.Interface, error) {
 }
 
 func DirectRouting(ip net.IP) (bool, error) {
+	// 获取到目标地址ip的路由，相当于ip route get
 	routes, err := netlink.RouteGet(ip)
 	if err != nil {
 		return false, fmt.Errorf("couldn't lookup route to %v: %v", ip, err)
 	}
+	// 判断是否是直接路由,需满足两个条件
+	// 1. 符合目标地址的路由只有一条
+	// 2. 路由的网关不存在
 	if len(routes) == 1 && routes[0].Gw == nil {
 		// There is only a single route and there's no gateway (i.e. it's directly connected)
 		return true, nil
@@ -135,6 +139,7 @@ func DirectRouting(ip net.IP) (bool, error) {
 // EnsureV4AddressOnLink ensures that there is only one v4 Addr on `link` within the `ipn` address space and it equals `ipa`.
 func EnsureV4AddressOnLink(ipa IP4Net, ipn IP4Net, link netlink.Link) error {
 	addr := netlink.Addr{IPNet: ipa.ToIPNet()}
+	// 等同于ip addr show
 	existingAddrs, err := netlink.AddrList(link, netlink.FAMILY_V4)
 	if err != nil {
 		return err

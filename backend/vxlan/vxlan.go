@@ -26,6 +26,9 @@ package vxlan
 //   the kernal vxlan code to the flannel daemon to get the public IP that should be used for that VTEP (this gets called
 //   an L3 miss). The L2/L3 miss hooks are registered when the vxlan device is created. At the same time a device route
 //   is created to the whole flannel network so that non-local traffic is sent over the vxlan device.
+// - ①L2 miss 报文找不到目标mac地址，产生L2 miss
+//   ②虽然使用VTEP的mac地址，但是发送外部无法知道具体IP，需要查询VTEP的公共IP，产生L3 miss
+//
 //
 // In this scheme the scaling of table entries (per host) is:
 //  - 1 route (for the configured network out the vxlan device)
@@ -44,8 +47,11 @@ package vxlan
 // Create the vxlan device but don't register for any L2MISS or L3MISS messages
 // Then, as each remote host is discovered (either on startup or when they are added), do the following
 // 1) Create routing table entry for the remote subnet. It goes via the vxlan device but also specifies a next hop (of the remote flannel host).
+// 1) 为每个远程子网创建路由表记录。该条路由通过vxlan设备但是同时指向了下一个跳点(远程flannel主机).
 // 2) Create a static ARP entry for the remote flannel host IP address (and the VTEP MAC)
+// 2) 为远程flannel主机IP地址(以及VTEP MAC)创建静态ARP记录.
 // 3) Create an FDB entry with the VTEP MAC and the public IP of the remote flannel daemon.
+// 3) 创建FDB记录，包含有VTEP MAC和远程flannel daemon的公共IP.
 //
 // In this scheme the scaling of table entries is linear to the number of remote hosts - 1 route, 1 arp entry and 1 FDB entry per host
 //
@@ -88,6 +94,7 @@ func New(sm subnet.Manager, extIface *backend.ExternalInterface) (backend.Backen
 	return backend, nil
 }
 
+// 记录了设备类型，VIN，硬件地址，公共IP等信息
 func newSubnetAttrs(publicIP net.IP, vnid uint16, mac net.HardwareAddr) (*subnet.LeaseAttrs, error) {
 	data, err := json.Marshal(&vxlanLeaseAttrs{
 		VNI:     vnid,
@@ -103,8 +110,10 @@ func newSubnetAttrs(publicIP net.IP, vnid uint16, mac net.HardwareAddr) (*subnet
 	}, nil
 }
 
+// 注册网络
 func (be *VXLANBackend) RegisterNetwork(ctx context.Context, wg *sync.WaitGroup, config *subnet.Config) (backend.Network, error) {
 	// Parse our configuration
+	// 解析配置
 	cfg := struct {
 		VNI           int
 		Port          int
@@ -132,17 +141,20 @@ func (be *VXLANBackend) RegisterNetwork(ctx context.Context, wg *sync.WaitGroup,
 		learning:  cfg.Learning,
 	}
 
+	// 创建VXLAN设备(调用系统接口真实创建)
 	dev, err := newVXLANDevice(&devAttrs)
 	if err != nil {
 		return nil, err
 	}
 	dev.directRouting = cfg.DirectRouting
 
+	// 创建子网
 	subnetAttrs, err := newSubnetAttrs(be.extIface.ExtAddr, uint16(cfg.VNI), dev.MACAddr())
 	if err != nil {
 		return nil, err
 	}
 
+	// 获取租约信息
 	lease, err := be.subnetMgr.AcquireLease(ctx, subnetAttrs)
 	switch err {
 	case nil:
@@ -155,6 +167,8 @@ func (be *VXLANBackend) RegisterNetwork(ctx context.Context, wg *sync.WaitGroup,
 	// Ensure that the device has a /32 address so that no broadcast routes are created.
 	// This IP is just used as a source address for host to workload traffic (so
 	// the return path for the traffic has an address on the flannel network to use as the destination)
+	// 确保当前设备拥有/32地址，避免创建广播路由。
+	// IP只是用在主机到工作负载流量的主机源地址(所以流量的返回路径里在flannel网络里有一个地址用作目的地)
 	if err := dev.Configure(ip.IP4Net{IP: lease.Subnet.IP, PrefixLen: 32}, config.Network); err != nil {
 		return nil, fmt.Errorf("failed to configure interface %s: %s", dev.link.Attrs().Name, err)
 	}

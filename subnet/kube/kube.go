@@ -60,17 +60,20 @@ type kubeSubnetManager struct {
 	events         chan subnet.Event
 }
 
+// 创建子网管理器
 func NewSubnetManager(ctx context.Context, apiUrl, kubeconfig, prefix, netConfPath string) (subnet.Manager, error) {
 	var cfg *rest.Config
 	var err error
 	// Try to build kubernetes config from a master url or a kubeconfig filepath. If neither masterUrl
 	// or kubeconfigPath are passed in we fall back to inClusterConfig. If inClusterConfig fails,
 	// we fallback to the default config.
+	// 获取kubeconfig
 	cfg, err = clientcmd.BuildConfigFromFlags(apiUrl, kubeconfig)
 	if err != nil {
 		return nil, fmt.Errorf("fail to create kubernetes config: %v", err)
 	}
 
+	// 生成Kubernetes ClientSet
 	c, err := clientset.NewForConfig(cfg)
 	if err != nil {
 		return nil, fmt.Errorf("unable to initialize client: %v", err)
@@ -79,6 +82,7 @@ func NewSubnetManager(ctx context.Context, apiUrl, kubeconfig, prefix, netConfPa
 	// The kube subnet mgr needs to know the k8s node name that it's running on so it can annotate it.
 	// If we're running as a pod then the POD_NAME and POD_NAMESPACE will be populated and can be used to find the node
 	// name. Otherwise, the environment variable NODE_NAME can be passed in.
+	// 获取节点名称
 	nodeName := os.Getenv("NODE_NAME")
 	if nodeName == "" {
 		podName := os.Getenv("POD_NAME")
@@ -97,16 +101,19 @@ func NewSubnetManager(ctx context.Context, apiUrl, kubeconfig, prefix, netConfPa
 		}
 	}
 
+	// 读取网络配置文件
 	netConf, err := ioutil.ReadFile(netConfPath)
 	if err != nil {
 		return nil, fmt.Errorf("failed to read net conf: %v", err)
 	}
 
+	// 解析子网配置
 	sc, err := subnet.ParseConfig(string(netConf))
 	if err != nil {
 		return nil, fmt.Errorf("error parsing subnet config: %s", err)
 	}
 
+	// 创建子网管理器
 	sm, err := newKubeSubnetManager(ctx, c, sc, nodeName, prefix)
 	if err != nil {
 		return nil, fmt.Errorf("error creating network manager: %s", err)
@@ -114,6 +121,7 @@ func NewSubnetManager(ctx context.Context, apiUrl, kubeconfig, prefix, netConfPa
 	go sm.Run(context.Background())
 
 	log.Infof("Waiting %s for node controller to sync", nodeControllerSyncTimeout)
+	// 等待节点信息同步完毕
 	err = wait.Poll(time.Second, nodeControllerSyncTimeout, func() (bool, error) {
 		return sm.nodeController.HasSynced(), nil
 	})
@@ -135,6 +143,7 @@ func newKubeSubnetManager(ctx context.Context, c clientset.Interface, sc *subnet
 	ksm.client = c
 	ksm.nodeName = nodeName
 	ksm.subnetConf = sc
+	// 缓冲元素数为500的事件通道
 	ksm.events = make(chan subnet.Event, 5000)
 	indexer, controller := cache.NewIndexerInformer(
 		&cache.ListWatch{
@@ -267,7 +276,7 @@ func (ksm *kubeSubnetManager) AcquireLease(ctx context.Context, attrs *subnet.Le
 		if err != nil {
 			return nil, fmt.Errorf("failed to create patch for node %q: %v", ksm.nodeName, err)
 		}
-
+		// 给Node节点打上flannel标签信息
 		_, err = ksm.client.CoreV1().Nodes().Patch(ctx, ksm.nodeName, types.StrategicMergePatchType, patchBytes, metav1.PatchOptions{}, "status")
 		if err != nil {
 			return nil, err

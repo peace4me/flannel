@@ -189,11 +189,13 @@ func main() {
 	flagutil.SetFlagsFromEnv(flannelFlags, "FLANNELD")
 
 	// Validate flags
+	// 1~1339分钟
 	if opts.subnetLeaseRenewMargin >= 24*60 || opts.subnetLeaseRenewMargin <= 0 {
 		log.Error("Invalid subnet-lease-renew-margin option, out of acceptable range")
 		os.Exit(1)
 	}
 
+	// 计算出使用的网口
 	// Work out which interface to use
 	var extIface *backend.ExternalInterface
 	var err error
@@ -244,7 +246,7 @@ func main() {
 	// to block until all the goroutines return . If those goroutines spawn other goroutines then they are responsible for
 	// blocking and returning only when cancel() is called.
 	ctx, cancel := context.WithCancel(context.Background())
-
+	// 创建子网管理器
 	sm, err := newSubnetManager(ctx)
 	if err != nil {
 		log.Error("Failed to create SubnetManager: ", err)
@@ -271,6 +273,7 @@ func main() {
 	}
 
 	// Fetch the network config (i.e. what backend to use etc..).
+	// 获取配置文件
 	config, err := getConfig(ctx, sm)
 	if err == errCanceled {
 		wg.Wait()
@@ -278,6 +281,7 @@ func main() {
 	}
 
 	// Create a backend manager then use it to create the backend and register the network with it.
+	// 创建后端管理器
 	bm := backend.NewManager(ctx, sm, extIface)
 	be, err := bm.GetBackend(config.BackendType)
 	if err != nil {
@@ -287,6 +291,7 @@ func main() {
 		os.Exit(1)
 	}
 
+	// 注册网络
 	bn, err := be.RegisterNetwork(ctx, &wg, config)
 	if err != nil {
 		log.Errorf("Error registering network: %s", err)
@@ -411,6 +416,7 @@ func MonitorLease(ctx context.Context, sm subnet.Manager, bn backend.Network, wg
 	}()
 
 	renewMargin := time.Duration(opts.subnetLeaseRenewMargin) * time.Minute
+	// 将要触发更新时间边界的时候
 	dur := bn.Lease().Expiration.Sub(time.Now()) - renewMargin
 
 	for {
@@ -445,6 +451,10 @@ func MonitorLease(ctx context.Context, sm subnet.Manager, bn backend.Network, wg
 	}
 }
 
+// 查找对外网口
+// 1. 先根据网口名称查找
+// 2. 再根据正则匹配查找
+// 3. 获取默认路由网口
 func LookupExtIface(ifname string, ifregex string) (*backend.ExternalInterface, error) {
 	var iface *net.Interface
 	var ifaceAddr net.IP

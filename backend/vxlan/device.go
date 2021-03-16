@@ -29,6 +29,7 @@ import (
 )
 
 type vxlanDeviceAttrs struct {
+	// virtual networking index
 	vni       uint32
 	name      string
 	vtepIndex int
@@ -61,6 +62,11 @@ func newVXLANDevice(devAttrs *vxlanDeviceAttrs) (*vxlanDevice, error) {
 		return nil, err
 	}
 
+	// Whether Accept router advertisement
+	// 是否接收路由广告
+	// 0 不接收路由广告
+	// 1 在转发禁用的情况下接收路由广告
+	// 2 否定转发行为，即使转发启用，仍接收路由广告
 	_, _ = sysctl.Sysctl(fmt.Sprintf("net/ipv6/conf/%s/accept_ra", devAttrs.name), "0")
 
 	return &vxlanDevice{
@@ -68,10 +74,12 @@ func newVXLANDevice(devAttrs *vxlanDeviceAttrs) (*vxlanDevice, error) {
 	}, nil
 }
 
+// 确保设备存在，若已存在，检测已有设备兼容性；若不存在，创建新设备
 func ensureLink(vxlan *netlink.Vxlan) (*netlink.Vxlan, error) {
 	err := netlink.LinkAdd(vxlan)
 	if err == syscall.EEXIST {
 		// it's ok if the device already exists as long as config is similar
+		// 如果设备已经存在但是配置相似，那么也认为当前设备可行
 		log.V(1).Infof("VXLAN device already exists")
 		existing, err := netlink.LinkByName(vxlan.Name)
 		if err != nil {
@@ -85,12 +93,14 @@ func ensureLink(vxlan *netlink.Vxlan) (*netlink.Vxlan, error) {
 		}
 
 		// delete existing
+		// 如果不兼容，删除既有设备
 		log.Warningf("%q already exists with incompatable configuration: %v; recreating device", vxlan.Name, incompat)
 		if err = netlink.LinkDel(existing); err != nil {
 			return nil, fmt.Errorf("failed to delete interface: %v", err)
 		}
 
 		// create new
+		// 创建新的设备
 		if err = netlink.LinkAdd(vxlan); err != nil {
 			return nil, fmt.Errorf("failed to create vxlan interface: %v", err)
 		}
@@ -113,10 +123,12 @@ func ensureLink(vxlan *netlink.Vxlan) (*netlink.Vxlan, error) {
 }
 
 func (dev *vxlanDevice) Configure(ipa ip.IP4Net, flannelnet ip.IP4Net) error {
+	// 确保vxlan网口设备上的IP为ipn
 	if err := ip.EnsureV4AddressOnLink(ipa, flannelnet, dev.link); err != nil {
 		return fmt.Errorf("failed to ensure address of interface %s: %s", dev.link.Attrs().Name, err)
 	}
 
+	// 启动vxlan网口设备
 	if err := netlink.LinkSetUp(dev.link); err != nil {
 		return fmt.Errorf("failed to set interface %s to UP state: %s", dev.link.Attrs().Name, err)
 	}
@@ -178,6 +190,7 @@ func (dev *vxlanDevice) DelARP(n neighbor) error {
 	})
 }
 
+// 对于设备信息里的几个关键指标进行比对
 func vxlanLinksIncompat(l1, l2 netlink.Link) string {
 	if l1.Type() != l2.Type() {
 		return fmt.Sprintf("link type: %v vs %v", l1.Type(), l2.Type())
